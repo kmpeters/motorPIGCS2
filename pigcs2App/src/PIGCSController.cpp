@@ -113,19 +113,44 @@ bool PIGCSController::IsGCS2(PIInterface* pInterface)
 
 asynStatus PIGCSController::setVelocityCts( PIasynAxis* pAxis, double velocity )
 {
-    if (!m_KnowsVELcommand)
-    {
-        return asynSuccess;
-    }
 	char cmd[100];
 	velocity = fabs(velocity) * pAxis->m_CPUdenominator / pAxis->m_CPUnumerator;
     sprintf(cmd,"VEL %s %f", pAxis->m_szAxisName, velocity);
+    pAxis->m_velocity = velocity;
     asynStatus status = m_pInterface->sendOnly(cmd);
-    if (asynSuccess == status)
+    if (asynSuccess != status)
     {
-    	pAxis->m_velocity = velocity;
+    	return status; 
     }
-    return status;
+    int errorCode = getGCSError();
+    if (errorCode == 0)
+    	return asynSuccess;
+    
+    asynPrint(m_pInterface->m_pCurrentLogSink, ASYN_TRACE_FLOW|ASYN_TRACE_ERROR,
+    		"PIGCSController::setVelocityCts failed, GCS error %d\n", errorCode);
+    
+    return asynError;
+}
+
+asynStatus PIGCSController::setAccelerationCts( PIasynAxis* pAxis, double acceleration)
+{
+    char cmd[100];
+    acceleration = fabs(acceleration) * pAxis->m_CPUdenominator / pAxis->m_CPUnumerator;
+    sprintf(cmd,"ACC %s %f", pAxis->m_szAxisName, acceleration);
+    asynStatus status = m_pInterface->sendOnly(cmd);
+    pAxis->m_acceleration = acceleration;
+    if (asynSuccess != status)
+    {
+        return status; 
+    }
+    int errorCode = getGCSError();
+    if (errorCode == 0)
+    	return asynSuccess;
+
+    asynPrint(m_pInterface->m_pCurrentLogSink, ASYN_TRACE_FLOW|ASYN_TRACE_ERROR,
+    		"PIGCSController::setAccelerationCts failed, GCS error %d\n", errorCode);
+    
+    return asynError; 
 }
 
 asynStatus PIGCSController::moveCts( PIasynAxis** pAxesArray, int* pTargetCtsArray, int numAxes)
@@ -163,7 +188,7 @@ asynStatus PIGCSController::setAxisPositionCts(PIasynAxis* pAxis, double positio
 	double position = double(positionCts) * pAxis->m_CPUdenominator / pAxis->m_CPUnumerator;
 
 	asynPrint(m_pInterface->m_pCurrentLogSink, ASYN_TRACE_FLOW|ASYN_TRACE_ERROR,
-		"PIGCSController::setAxisPositionCts(, %d) \n", positionCts);
+		"PIGCSController::setAxisPositionCts(, %f) \n", positionCts);
 	return setAxisPosition(pAxis, position);
 }
 
@@ -206,13 +231,20 @@ asynStatus PIGCSController::setAxisPosition(PIasynAxis* pAxis, double position)
 
 }
 
-
-asynStatus PIGCSController::moveCts( PIasynAxis* pAxis, int targetCts )
+asynStatus PIGCSController::moveCts( PIasynAxis* pAxis, double lowLimit, double highLimit, double targetCts )
 {
-	double target = double(targetCts) * pAxis->m_CPUdenominator / pAxis->m_CPUnumerator;
-    asynPrint(m_pInterface->m_pCurrentLogSink, ASYN_TRACE_FLOW|ASYN_TRACE_ERROR,
-    		"PIGCSController::moveCts(, %d) \n", targetCts);
+    double target;
+    if(targetCts !=0) target = targetCts * pAxis->m_CPUdenominator / pAxis->m_CPUnumerator;
+    else              target = targetCts;
+    if(target >= lowLimit && target <= highLimit)
+    {
+        asynPrint(m_pInterface->m_pCurrentLogSink, ASYN_TRACE_FLOW|ASYN_TRACE_ERROR,
+        "PIGCSController::moveCts(, %f) \n", targetCts);
 	return move(pAxis, target);
+    }
+    
+    asynPrint(m_pInterface->m_pCurrentLogSink, ASYN_TRACE_FLOW|ASYN_TRACE_ERROR, "PIGCSController::moveCts() failed, out of limits target position\n");
+    return asynError;
 }
 
 asynStatus PIGCSController::move( PIasynAxis* pAxis, double target )
@@ -310,6 +342,27 @@ asynStatus PIGCSController::getAxisPosition(PIasynAxis* pAxis, double& position)
 		status = asynError;
 	}
 	return status;
+}
+
+asynStatus PIGCSController::getAxisPositionEGU(int inputSignalChannel, double& position)
+{
+    const char* szIdentification = (char*) this->szIdentification;
+    if(strstr(szIdentification, "E-727") != NULL){
+	char cmd[100];
+	char buf[255];
+	sprintf(cmd, "TSP? %d", (inputSignalChannel+1));
+	asynStatus status = m_pInterface->sendAndReceive(cmd, buf, 99);
+	if (status != asynSuccess)
+	{
+		return status;
+	}
+	if (!getValue(buf, position))
+	{
+		status = asynError;
+	}
+	return status;
+    }
+    return asynSuccess;
 }
 
 /**
